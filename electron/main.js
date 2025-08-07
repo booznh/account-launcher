@@ -9,6 +9,12 @@ const { spawn, exec } = require('child_process');
 const os = require('os');
 const { v4: uuidv4 } = require('uuid');
 
+// GitLab configuration
+const GITLAB_CONFIG = {
+    projectUrl: 'https://gitlab.com/osrsislamg-group/ghostlite-launcher',
+    configUrl: 'https://gitlab.com/osrsislamg-group/ghostlite-launcher/-/raw/main/launcher-config.json'
+};
+
 const childProcesses = [];
 const clientProcesses = []; // For game clients that should keep running
 const jcefProcesses = []; // For JCEF browser windows that should close with launcher

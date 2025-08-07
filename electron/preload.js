@@ -18,6 +18,12 @@ contextBridge.exposeInMainWorld('electron', {
     downloadLatestVersion: () => ipcRenderer.invoke('download-latest-version'),
     readProperties: () => ipcRenderer.invoke('read-properties'),
     writeProperties: (data) => ipcRenderer.invoke('write-properties', data),
+
+    checkLauncherUpdates: () => ipcRenderer.invoke('check-launcher-updates'),
+    downloadLauncherUpdate: (downloadUrl) => ipcRenderer.invoke('download-launcher-update', downloadUrl),
+    installLauncherUpdate: (filePath) => ipcRenderer.invoke('install-launcher-update', filePath),
+    openReleaseNotes: (url) => ipcRenderer.invoke('open-release-notes', url),
+
     on: (channel, callback) => {
         const newCallback = (_, data) => callback(data);
         ipcRenderer.on(channel, newCallback);
