@@ -1,7 +1,41 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Play, Plus, Trash2, Server, X, UploadCloud, Download, Check, Users, Fingerprint, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { Play, Plus, Trash2, Server, X, UploadCloud, Download, Check, Users, Fingerprint, CheckCircle, AlertCircle, RefreshCw, Sparkles } from 'lucide-react';
 
 // --- Reusable Sub-components ---
+
+// A dedicated component for the update notification bar
+const UpdateNotification = ({ status, onRestart }) => {
+    if (!status) return null;
+
+    if (status === 'downloaded') {
+        return (
+            <div className="bg-emerald-500/90 text-white p-3 rounded-lg flex items-center justify-between shadow-lg mb-4">
+                <div className="flex items-center space-x-2">
+                    <Sparkles size={18} />
+                    <span className="font-medium text-sm">A new version is ready!</span>
+                </div>
+                <button
+                    onClick={onRestart}
+                    className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-md text-sm font-semibold"
+                >
+                    Restart & Update
+                </button>
+            </div>
+        );
+    }
+
+    if (status === 'available') {
+        return (
+            <div className="bg-custom-blue/90 text-white p-3 rounded-lg flex items-center space-x-2 shadow-lg mb-4">
+                <Download size={16} className="animate-pulse" />
+                <span className="font-medium text-sm">Update found, downloading now...</span>
+            </div>
+        );
+    }
+
+    return null;
+};
+
 const Toast = ({ message, type, onDismiss }) => {
     useEffect(() => {
         const timer = setTimeout(onDismiss, 4000);
@@ -130,6 +164,8 @@ const GhostliteLauncher = () => {
     const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
     const [showVersionModal, setShowVersionModal] = useState(false);
     const [downloadProgress, setDownloadProgress] = useState(null);
+    const [launcherVersion, setLauncherVersion] = useState('');
+    const [updateStatus, setUpdateStatus] = useState(null); // 'available' | 'downloaded' | null
 
     const setSelectedVersion = useCallback(async (v) => { if (window.electron) { setSelectedVersionState(v); await window.electron.writeProperties({ version_pref: v }); } }, []);
     const fetchClientVersions = useCallback(async () => { if (!window.electron) return []; const jars = await window.electron.listJars() || []; setClientVersions(jars); return jars; }, []);
@@ -157,6 +193,8 @@ const GhostliteLauncher = () => {
         if (window.electron) {
             const init = async () => {
                 try {
+                    const version = await window.electron.getLauncherVersion();
+                    setLauncherVersion(version);
                     await Promise.all([fetchJagexAccounts(), fetchLegacyAccounts()]);
                     const [props, jars] = await Promise.all([window.electron.readProperties(), fetchClientVersions()]);
                     if (jars.length > 0) setSelectedVersionState(props.version_pref && jars.includes(props.version_pref) ? props.version_pref : jars[0]);
@@ -166,8 +204,20 @@ const GhostliteLauncher = () => {
                 }
             };
             init();
-            window.electron.on('accounts-file-changed', fetchJagexAccounts);
-            window.electron.on('download-progress', setDownloadProgress);
+
+            // Listen for events from main.js
+            const cleanupUpdateAvailable = window.electron.on('update-available', () => setUpdateStatus('available'));
+            const cleanupUpdateDownloaded = window.electron.on('update-downloaded', () => setUpdateStatus('downloaded'));
+            const cleanupAccountsChanged = window.electron.on('accounts-file-changed', fetchJagexAccounts);
+            const cleanupDownloadProgress = window.electron.on('download-progress', setDownloadProgress);
+
+            // Cleanup listeners when component unmounts
+            return () => {
+                cleanupUpdateAvailable();
+                cleanupUpdateDownloaded();
+                cleanupAccountsChanged();
+                cleanupDownloadProgress();
+            };
         }
     }, [fetchJagexAccounts, fetchLegacyAccounts, fetchClientVersions]);
 
@@ -200,7 +250,7 @@ const GhostliteLauncher = () => {
             username: opts.username,
             password: opts.password
         });
-    }; // Added the missing closing bracket here!
+    };
 
     const handleMultiLaunch = async () => {
         if (!window.electron || selectedJagexAccounts.size === 0) return;
@@ -226,12 +276,26 @@ const GhostliteLauncher = () => {
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 text-gray-200 font-sans">
-            <div className="relative z-10 p-4 sm:p-5 lg:p-6 space-y-4">
+            <div className="relative z-10 p-4 sm:p-5 lg:p-6">
                 {toast && <Toast {...toast} onDismiss={() => setToast(null)} />}
                 {proxyModalAccount && <ProxySettingsModal account={proxyModalAccount} onClose={() => setProxyModalAccount(null)} onSave={(id, proxy) => window.electron.saveAccountProxy({ accountId: id, proxy }).then(fetchJagexAccounts)} />}
                 {showVersionModal && <VersionSelectionModal onClose={() => setShowVersionModal(false)} onDownload={(v) => handleDownload(window.electron.downloadVersion(v))} {...{ latestVersionInfo, allVersionsInfo, clientVersions }} />}
 
                 <main className="space-y-4 max-w-5xl mx-auto">
+                    <header className="flex justify-between items-center">
+                        <h1 className="text-2xl font-bold text-white">Ghostlite Launcher</h1>
+                        {launcherVersion && (
+                            <span className="text-xs font-mono text-gray-400 bg-gray-800/50 px-2 py-1 rounded-md">
+                                v{launcherVersion}
+                            </span>
+                        )}
+                    </header>
+
+                    <UpdateNotification
+                        status={updateStatus}
+                        onRestart={() => window.electron.restartApp()}
+                    />
+
                     <div className="p-4 bg-gray-900/80 backdrop-blur-md border border-gray-700/50 rounded-xl">
                         <h2 className="text-lg font-semibold mb-3 text-white">Client Settings</h2>
                         <div className="flex items-center space-x-2 flex-wrap gap-2">

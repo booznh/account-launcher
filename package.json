@@ -1,6 +1,6 @@
 {
   "name": "ghostlite-launcher",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "author": "Ghostlite Team",
   "description": "A modern launcher for your application.",
@@ -28,6 +28,11 @@
   "build": {
     "appId": "com.ghostlite.launcher",
     "productName": "Ghostlite Launcher",
+    "publish": {
+      "provider": "gitlab",
+      "owner": "osrsislamg-group",
+      "repo": "ghostlite-launcher"
+    },
     "files": [
       "build/",
       "electron/"
@@ -71,7 +76,7 @@
     "@tailwindcss/forms": "^0.5.7",
     "concurrently": "^8.2.2",
     "electron": "^28.2.0",
-    "electron-builder": "^24.9.1",
+    "electron-builder": "^26.0.12",
     "tailwindcss": "^3.4.4",
     "wait-on": "^7.2.0"
   }

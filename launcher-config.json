@@ -1,7 +1,7 @@
 {
-  "version": "1.0.1",
+  "version": "1.0.2",
   "minimumVersion": "1.0.0",
-  "downloadUrl": "https://gitlab.com/osrsislamg-group/ghostlite-launcher/-/releases/v1.0.0/downloads/ghostlite-launcher-setup.exe",
+  "downloadUrl": "https://gitlab.com/osrsislamg-group/ghostlite-launcher/-/releases/v1.0.2/downloads/ghostlite-launcher-setup.exe",
   "changes": [
     "Testing version update functionality"
   ],

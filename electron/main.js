@@ -8,8 +8,16 @@ const log = require('electron-log');
 const { spawn, exec } = require('child_process');
 const os = require('os');
 const { v4: uuidv4 } = require('uuid');
+const { autoUpdater } = require('electron-updater');
 
-// GitLab configuration
+// --- Main Process Setup ---
+
+// Configure logging
+autoUpdater.logger = log;
+autoUpdater.logger.transports.file.level = 'info';
+log.info('App starting...');
+
+// GitLab configuration (for JARs, not launcher updates)
 const GITLAB_CONFIG = {
     projectUrl: 'https://gitlab.com/osrsislamg-group/ghostlite-launcher',
     configUrl: 'https://gitlab.com/osrsislamg-group/ghostlite-launcher/-/raw/main/launcher-config.json'
@@ -36,21 +44,39 @@ async function getLatestVersionInfo() {
             };
         }
     } catch (error) {
-        log.error('Failed to fetch version info. This could be a firewall, network, or SSL issue.', error.message);
+        log.error('Failed to fetch JAR version info:', error.message);
         return null;
     }
     return null;
 }
 
 let mainWindow;
+
+// --- Auto-Updater Event Handling ---
+autoUpdater.on('update-available', () => {
+  log.info('Update available.');
+  mainWindow.webContents.send('update-available');
+});
+
+autoUpdater.on('update-downloaded', () => {
+  log.info('Update downloaded.');
+  mainWindow.webContents.send('update-downloaded');
+});
+
+ipcMain.on('restart-app', () => {
+  log.info('Restarting app to install update.');
+  autoUpdater.quitAndInstall();
+});
+
+
 async function createWindow() {
-    console.log('Creating main window...');
+    log.info('Creating main window...');
     mainWindow = new BrowserWindow({
         width: 1024,
         height: 768,
         minWidth: 800,
         show: true,
-        titleBarStyle: 'default',
+        title: `Ghostlite Launcher v${app.getVersion()}`,
         center: true,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
@@ -59,22 +85,27 @@ async function createWindow() {
         }
     });
 
-    console.log('Loading url');
     const startUrl = isDev ? 'http://localhost:3000' : `file://${path.join(__dirname, '../build/index.html')}`;
     await mainWindow.loadURL(startUrl);
-    console.log('URL loaded, showing window');
+    log.info('URL loaded, showing window.');
+
+    // Check for updates without automatically notifying. Events will handle UI.
+    autoUpdater.checkForUpdates();
 
     if (isDev) mainWindow.webContents.openDevTools();
     mainWindow.once('ready-to-show', () => {
-        console.log('Window ready to show');
         mainWindow.show();
     });
     mainWindow.on('closed', () => (mainWindow = null));
     watchAccountsFile(mainWindow);
 }
 
+// --- IPC Handlers ---
 function setupIpcHandlers() {
     const deps = { ipcMain, microbotDir, fs, path, log, spawn, dialog, shell, axios, http, os };
+
+    ipcMain.handle('get-launcher-version', () => app.getVersion());
+
     setupAccountsHandlers(deps);
     setupLegacyAccountsHandlers(deps);
     setupGameLaunchHandlers(deps);
@@ -85,7 +116,13 @@ function setupIpcHandlers() {
 
 function watchAccountsFile(window) {
     const accountsPath = path.resolve(microbotDir, 'accounts.json');
-    if (fs.existsSync(accountsPath)) fs.watch(accountsPath, (e) => e === 'change' && window?.webContents.send('accounts-file-changed'));
+    if (fs.existsSync(accountsPath)) {
+        fs.watch(accountsPath, (e) => {
+            if (e === 'change' && window && !window.isDestroyed()) {
+                window.webContents.send('accounts-file-changed');
+            }
+        });
+    }
 }
 
 function setupAccountsHandlers({ ipcMain, microbotDir, fs, path, log, os }) {
@@ -129,15 +166,13 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
     const startCredServer = (user, pass) => new Promise((res) => http.createServer((req, resp) => { resp.writeHead(200, { 'Content-Type': 'application/json' }); resp.end(JSON.stringify({ username: user, password: pass })); req.socket.server.close(); }).listen(0, function() { res(this.address().port); }));
     const isJava = (cb) => spawn('java', ['-version']).on('error', () => cb(false)).on('close', code => cb(code === 0));
 
-    // Updated execJar function to handle different process types
     const execJar = (args, processType = 'other') => {
         log.info(`Executing: java ${args.join(' ')}`);
         const p = spawn('java', args, { stdio: 'ignore', detached: processType === 'client' });
 
-        // Add to appropriate process array based on type
         if (processType === 'client') {
             clientProcesses.push(p);
-            p.unref(); // Unref client processes so they can run independently
+            p.unref();
         } else if (processType === 'jcef') {
             jcefProcesses.push(p);
         } else {
@@ -145,7 +180,6 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
         }
 
         p.on('close', () => {
-            // Remove from all arrays when process closes
             [childProcesses, clientProcesses, jcefProcesses].forEach(arr => {
                 const i = arr.indexOf(p);
                 if (i > -1) arr.splice(i, 1);
@@ -155,27 +189,22 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
 
     const run = (args, processType = 'other') => isJava(ok => ok ? execJar(args, processType) : dialog.showMessageBox({ type: 'error', title: 'Java Not Found', message: 'Java is required. Download now?', buttons: ['Yes', 'No'] }).then(r => r.response === 0 && shell.openExternal('https://www.oracle.com/java/technologies/downloads/')));
 
-    // Updated open-client handler with proper error handling
     ipcMain.handle('open-client', async (event, options) => {
         log.info('open-client called with options:', JSON.stringify(options));
-
         const { version, proxy, username, password } = options || {};
-
         if (!version) {
             log.error('No version specified for client launch');
             return { success: false, error: 'Version is required' };
         }
-
         const args = [];
         if (username && password) args.push(`-Drunelite.api.port=${await startCredServer(username, password)}`);
         args.push('-jar', path.join(microbotDir, version));
         if (proxy?.ip) args.push(`--proxy=${proxy.ip}`, `--proxy-type=${proxy.type || 'http'}`);
         if (username) args.push('--clean-jagex-launcher');
-        run(args, 'client'); // Mark as client process
+        run(args, 'client');
         return { success: true };
     });
 
-    // Updated open-launcher handler
     ipcMain.handle('open-launcher', async () => {
         run([`-Djava.library.path=${path.join(microbotDir, 'jcef-bundle')}`, '-jar', path.join(microbotDir, 'microbot-launcher.jar')], 'jcef');
         return { success: true };
@@ -216,94 +245,49 @@ function setupDownloadHandlers({ ipcMain, axios, fs, path, microbotDir, dialog }
     });
 }
 
-// App event handlers
+// --- App Lifecycle ---
 app.whenReady().then(() => { setupIpcHandlers(); createWindow(); });
 app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 
-// Function to kill all JCEF-related processes
 const killJcefProcesses = () => {
     log.info('Killing all JCEF-related processes...');
-
     if (process.platform === 'win32') {
-        // Kill jcef_helper.exe processes
         exec('taskkill /f /im jcef_helper.exe', (error) => {
-            if (error && !error.message.includes('not found')) {
-                log.warn('Could not kill jcef_helper.exe:', error.message);
-            } else {
-                log.info('jcef_helper.exe processes terminated');
-            }
+            if (error && !error.message.includes('not found')) { log.warn('Could not kill jcef_helper.exe:', error.message); }
+            else { log.info('jcef_helper.exe processes terminated'); }
         });
-
-        // Kill JCEF-related Java processes (more comprehensive)
         const jcefCommands = [
             'wmic process where "name=\'java.exe\' and commandline like \'%jcef%\'" delete',
             'wmic process where "name=\'java.exe\' and commandline like \'%microbot-launcher%\'" delete',
             'wmic process where "name=\'javaw.exe\' and commandline like \'%jcef%\'" delete',
             'wmic process where "name=\'javaw.exe\' and commandline like \'%microbot-launcher%\'" delete'
         ];
-
         jcefCommands.forEach(cmd => {
             exec(cmd, (error) => {
-                if (error && !error.message.includes('not found')) {
-                    log.warn(`Command failed: ${cmd}`, error.message);
-                }
+                if (error && !error.message.includes('not found')) { log.warn(`Command failed: ${cmd}`, error.message); }
             });
         });
-    } else {
-        // For macOS/Linux - kill processes by command line pattern
-        exec('pkill -f jcef', (error) => {
-            if (error && error.code !== 1) { // code 1 means no processes found
-                log.warn('Could not kill JCEF processes on Unix:', error.message);
-            }
-        });
-
-        exec('pkill -f microbot-launcher', (error) => {
-            if (error && error.code !== 1) {
-                log.warn('Could not kill launcher processes on Unix:', error.message);
-            }
-        });
+    } else { // macOS/Linux
+        exec('pkill -f jcef', (error) => { if (error && error.code !== 1) { log.warn('Could not kill JCEF processes on Unix:', error.message); } });
+        exec('pkill -f microbot-launcher', (error) => { if (error && error.code !== 1) { log.warn('Could not kill launcher processes on Unix:', error.message); } });
     }
 };
 
-// Updated before-quit handler - only kill JCEF processes, not game clients
 app.on('before-quit', () => {
     log.info('Launcher closing - killing JCEF processes but leaving game clients running');
-
-    // Only kill JCEF browser processes and other launcher-related processes
     jcefProcesses.forEach(p => {
         try {
-            p.kill('SIGTERM'); // Try graceful termination first
-            setTimeout(() => {
-                try {
-                    p.kill('SIGKILL'); // Force kill if still running
-                } catch (e) {
-                    // Process might already be dead
-                }
-            }, 2000);
-        } catch (e) {
-            log.error('Error killing JCEF process:', e);
-        }
-    });
-
-    // Kill other child processes but NOT game clients
-    childProcesses.forEach(p => {
-        try {
             p.kill('SIGTERM');
-        } catch (e) {
-            log.error('Error killing child process:', e);
-        }
+            setTimeout(() => { try { p.kill('SIGKILL'); } catch (e) { /* Process might already be dead */ }}, 2000);
+        } catch (e) { log.error('Error killing JCEF process:', e); }
     });
-
-    // Kill all JCEF helper processes system-wide
+    childProcesses.forEach(p => {
+        try { p.kill('SIGTERM'); } catch (e) { log.error('Error killing child process:', e); }
+    });
     killJcefProcesses();
-
-    // Do NOT kill clientProcesses - let them continue running
 });
 
-// Updated window-all-closed handler
 app.on('window-all-closed', () => {
-    // Ensure all JCEF processes are killed when launcher closes
     killJcefProcesses();
-
     if (process.platform !== 'darwin') app.quit();
 });
