@@ -149,19 +149,20 @@ const promptInstallVisualCpp = async () => {
 };
 
 async function downloadJCEFBundle() {
+    ensureDirectoryExists(microbotDir);
+
     const jcefBundlePath = path.join(microbotDir, 'jcef-bundle');
 
-    // Check if JCEF bundle has actual content
     if (fs.existsSync(jcefBundlePath)) {
         const contents = fs.readdirSync(jcefBundlePath);
-        if (contents.length > 3) { // More than just a few placeholder files
+        if (contents.length > 3) {
             log.info('JCEF bundle already exists with content');
             return true;
         }
     }
 
     try {
-        log.info('Downloading JCEF bundle from jcefmaven...');
+        log.info('Downloading JCEF bundle from GitHub repository...');
 
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('download-progress', {
@@ -170,12 +171,9 @@ async function downloadJCEFBundle() {
             });
         }
 
-        if (!fs.existsSync(jcefBundlePath)) {
-            fs.mkdirSync(jcefBundlePath, { recursive: true });
-        }
+        ensureDirectoryExists(jcefBundlePath);
 
-        const jcefVersion = '1.0.66';
-        const jcefUrl = `https://github.com/jcefmaven/jcefbuild/releases/download/${jcefVersion}/jcef-distrib-win64.tar.gz`;
+        const jcefUrl = 'https://github.com/booznh/account-launcher/raw/main/releases/jcef-bundle.zip';
 
         log.info(`Downloading JCEF from: ${jcefUrl}`);
 
@@ -183,7 +181,7 @@ async function downloadJCEFBundle() {
             method: 'get',
             url: jcefUrl,
             responseType: 'arraybuffer',
-            timeout: 300000, // 5 minutes
+            timeout: 300000,
             onDownloadProgress: (progressEvent) => {
                 const percent = progressEvent.total
                     ? Math.round((progressEvent.loaded * 100) / progressEvent.total)
@@ -198,7 +196,7 @@ async function downloadJCEFBundle() {
             }
         });
 
-        const archivePath = path.join(microbotDir, 'jcef-distrib-win64.tar.gz');
+        const archivePath = path.join(microbotDir, 'jcef-bundle.zip');
         fs.writeFileSync(archivePath, response.data);
 
         if (mainWindow && !mainWindow.isDestroyed()) {
@@ -208,58 +206,46 @@ async function downloadJCEFBundle() {
             });
         }
 
-        const { spawn } = require('child_process');
+        const AdmZip = require('adm-zip');
+        const zip = new AdmZip(archivePath);
 
-        await new Promise((resolve, reject) => {
-            const extractProcess = spawn('tar', ['-xzf', archivePath, '-C', microbotDir], {
-                stdio: 'pipe'
-            });
+        const tempExtractPath = path.join(microbotDir, 'temp-jcef-extract');
+        ensureDirectoryExists(tempExtractPath);
 
-            extractProcess.on('close', (code) => {
-                if (code === 0) {
-                    const extractedDirs = fs.readdirSync(microbotDir).filter(item => {
-                        const itemPath = path.join(microbotDir, item);
-                        return fs.statSync(itemPath).isDirectory() &&
-                               (item.includes('jcef') || item.includes('cef'));
-                    });
+        zip.extractAllTo(tempExtractPath, true);
+        log.info('ZIP extracted successfully');
 
-                    if (extractedDirs.length > 0) {
-                        const extractedPath = path.join(microbotDir, extractedDirs[0]);
-                        log.info(`Found extracted JCEF directory: ${extractedPath}`);
+        const extractedItems = fs.readdirSync(tempExtractPath);
+        log.info('Extracted items:', extractedItems);
 
-                        const copyRecursively = (src, dest) => {
-                            const stats = fs.statSync(src);
-                            if (stats.isDirectory()) {
-                                if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
-                                fs.readdirSync(src).forEach(file => {
-                                    copyRecursively(path.join(src, file), path.join(dest, file));
-                                });
-                            } else {
-                                fs.copyFileSync(src, dest);
-                            }
-                        };
+        if (extractedItems.length === 1 && fs.statSync(path.join(tempExtractPath, extractedItems[0])).isDirectory()) {
+            const nestedFolderPath = path.join(tempExtractPath, extractedItems[0]);
+            const nestedItems = fs.readdirSync(nestedFolderPath);
 
-                        copyRecursively(extractedPath, jcefBundlePath);
+            for (const item of nestedItems) {
+                const sourcePath = path.join(nestedFolderPath, item);
+                const destPath = path.join(jcefBundlePath, item);
 
-                        fs.rmSync(extractedPath, { recursive: true, force: true });
-
-                        log.info('JCEF files copied to jcef-bundle directory');
-                    } else {
-                        log.warn('No JCEF directory found after extraction');
-                    }
-
-                    resolve();
+                if (fs.statSync(sourcePath).isDirectory()) {
+                    copyRecursively(sourcePath, destPath);
                 } else {
-                    reject(new Error(`Extraction failed with code ${code}`));
+                    fs.copyFileSync(sourcePath, destPath);
                 }
-            });
+            }
+        } else {
+            for (const item of extractedItems) {
+                const sourcePath = path.join(tempExtractPath, item);
+                const destPath = path.join(jcefBundlePath, item);
 
-            extractProcess.on('error', (error) => {
-                log.error('Extraction process error:', error);
-                reject(error);
-            });
-        });
+                if (fs.statSync(sourcePath).isDirectory()) {
+                    copyRecursively(sourcePath, destPath);
+                } else {
+                    fs.copyFileSync(sourcePath, destPath);
+                }
+            }
+        }
 
+        fs.rmSync(tempExtractPath, { recursive: true, force: true });
         fs.unlinkSync(archivePath);
 
         if (mainWindow && !mainWindow.isDestroyed()) {
@@ -277,13 +263,22 @@ async function downloadJCEFBundle() {
 
         log.info('JCEF bundle downloaded and extracted successfully');
 
-        const essentialFiles = ['jcef.jar', 'jcef_helper.exe'];
+        try {
+            const finalFiles = fs.readdirSync(jcefBundlePath);
+            log.info('Final JCEF bundle contents:', finalFiles);
+        } catch (err) {
+            log.error('Could not read final JCEF bundle directory:', err);
+        }
+
+        const essentialFiles = ['jcef.jar'];
         const missingFiles = essentialFiles.filter(file =>
             !fs.existsSync(path.join(jcefBundlePath, file))
         );
 
         if (missingFiles.length > 0) {
             log.warn('Some essential JCEF files are missing:', missingFiles);
+        } else {
+            log.info('All essential JCEF files found!');
         }
 
         return true;
@@ -299,20 +294,119 @@ async function downloadJCEFBundle() {
             const result = await dialog.showMessageBox(mainWindow, {
                 type: 'warning',
                 title: 'JCEF Download Failed',
-                message: 'Failed to download JCEF automatically',
-                detail: `Error: ${error.message}\n\nYou can:\n1. Try again later\n2. Download manually from GitHub\n3. Install via Chocolatey`,
-                buttons: ['Try Again', 'Open GitHub', 'Continue'],
+                message: 'Failed to download JCEF bundle',
+                detail: `Error: ${error.message}\n\nPlease check your internet connection and try again.`,
+                buttons: ['Try Again', 'Cancel'],
                 defaultId: 0
             });
 
             if (result.response === 0) {
-                return await downloadJCEFBundle(); // Retry
-            } else if (result.response === 1) {
-                shell.openExternal('https://github.com/jcefmaven/jcefbuild/releases');
+                return await downloadJCEFBundle();
             }
         }
 
         return false;
+    }
+}
+
+function copyRecursively(src, dest) {
+    const stats = fs.statSync(src);
+    if (stats.isDirectory()) {
+        ensureDirectoryExists(dest);
+        fs.readdirSync(src).forEach(file => {
+            copyRecursively(path.join(src, file), path.join(dest, file));
+        });
+    } else {
+        fs.copyFileSync(src, dest);
+    }
+}
+
+async function extractRarFile(archivePath, extractPath) {
+    try {
+        // Option 1: Try using 7-Zip if available
+        const { spawn } = require('child_process');
+
+        // Try 7zip first (most common)
+        const sevenZipPaths = [
+            'C:\\Program Files\\7-Zip\\7z.exe',
+            'C:\\Program Files (x86)\\7-Zip\\7z.exe',
+            '7z' // If it's in PATH
+        ];
+
+        for (const zipPath of sevenZipPaths) {
+            try {
+                await new Promise((resolve, reject) => {
+                    const extractProcess = spawn(zipPath, ['x', archivePath, `-o${extractPath}`, '-y'], {
+                        stdio: 'pipe'
+                    });
+
+                    extractProcess.on('close', (code) => {
+                        if (code === 0) {
+                            log.info('RAR extracted successfully with 7-Zip');
+                            resolve();
+                        } else {
+                            reject(new Error(`7-Zip extraction failed with code ${code}`));
+                        }
+                    });
+
+                    extractProcess.on('error', (error) => {
+                        reject(error);
+                    });
+                });
+                return; // Success, exit function
+            } catch (err) {
+                log.warn(`Failed to extract with ${zipPath}:`, err.message);
+                continue; // Try next path
+            }
+        }
+
+        // Option 2: Try WinRAR if 7-Zip failed
+        const winrarPaths = [
+            'C:\\Program Files\\WinRAR\\unrar.exe',
+            'C:\\Program Files (x86)\\WinRAR\\unrar.exe',
+            'unrar' // If it's in PATH
+        ];
+
+        for (const rarPath of winrarPaths) {
+            try {
+                await new Promise((resolve, reject) => {
+                    const extractProcess = spawn(rarPath, ['x', archivePath, extractPath], {
+                        stdio: 'pipe'
+                    });
+
+                    extractProcess.on('close', (code) => {
+                        if (code === 0) {
+                            log.info('RAR extracted successfully with WinRAR');
+                            resolve();
+                        } else {
+                            reject(new Error(`WinRAR extraction failed with code ${code}`));
+                        }
+                    });
+
+                    extractProcess.on('error', (error) => {
+                        reject(error);
+                    });
+                });
+                return; // Success, exit function
+            } catch (err) {
+                log.warn(`Failed to extract with ${rarPath}:`, err.message);
+                continue; // Try next path
+            }
+        }
+
+        // If we get here, no extraction method worked
+        throw new Error('No RAR extraction tool found. Please install 7-Zip or WinRAR.');
+
+    } catch (error) {
+        log.error('RAR extraction failed:', error);
+        throw error;
+    }
+}
+
+function ensureDirectoryExists(dirPath) {
+    if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+        log.info(`Created directory: ${dirPath}`);
     }
 }
 
@@ -536,25 +630,146 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
 
     const run = (args, processType = 'other') => isJava(ok => ok ? execJar(args, processType) : dialog.showMessageBox({ type: 'error', title: 'Java Not Found', message: 'Java is required. Download now?', buttons: ['Yes', 'No'] }).then(r => r.response === 0 && shell.openExternal('https://www.oracle.com/java/technologies/downloads/')));
 
+    // Helper function to download a specific version if missing
+    const ensureJarExists = async (version) => {
+        const jarPath = path.join(microbotDir, version);
+
+        if (fs.existsSync(jarPath)) {
+            log.info(`JAR file already exists: ${version}`);
+            return true;
+        }
+
+        log.info(`JAR file missing, downloading: ${version}`);
+
+        try {
+            // Show download progress
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('download-progress', {
+                    percent: 0,
+                    status: `Downloading ${version}...`
+                });
+            }
+
+            // Extract version number from filename (e.g., microbot-1.9.7.jar -> 1.9.7)
+            const versionMatch = version.match(/microbot-(.+)\.jar$/);
+            if (!versionMatch) {
+                throw new Error(`Invalid JAR filename format: ${version}`);
+            }
+
+            const versionNumber = versionMatch[1];
+            const downloadUrl = `https://gitlab.com/osrsislamg-group/microbot-releases/-/raw/main/microbot-${versionNumber}.jar`;
+
+            log.info(`Downloading from: ${downloadUrl}`);
+
+            const response = await axios({
+                method: 'get',
+                url: downloadUrl,
+                responseType: 'arraybuffer',
+                timeout: 60000,
+                onDownloadProgress: (progressEvent) => {
+                    const percent = progressEvent.total
+                        ? Math.round((progressEvent.loaded * 100) / progressEvent.total)
+                        : 0;
+
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('download-progress', {
+                            percent,
+                            status: `Downloading ${version}... ${percent}%`
+                        });
+                    }
+                }
+            });
+
+            fs.writeFileSync(jarPath, response.data);
+
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('download-progress', {
+                    percent: 100,
+                    status: `${version} downloaded successfully!`
+                });
+
+                // Clear progress after 2 seconds
+                setTimeout(() => {
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('download-progress', null);
+                    }
+                }, 2000);
+            }
+
+            log.info(`Successfully downloaded: ${version}`);
+            return true;
+
+        } catch (error) {
+            log.error(`Failed to download ${version}:`, error);
+
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('download-progress', null);
+
+                await dialog.showMessageBox(mainWindow, {
+                    type: 'error',
+                    title: 'Download Failed',
+                    message: `Failed to download ${version}`,
+                    detail: `Error: ${error.message}\n\nPlease try again or download manually.`,
+                    buttons: ['OK']
+                });
+            }
+
+            return false;
+        }
+    };
+
+    // UPDATED open-client handler with auto-download
     ipcMain.handle('open-client', async (event, options) => {
         log.info('open-client called with options:', JSON.stringify(options));
         const { version, proxy, username, password } = options || {};
+
         if (!version) {
             log.error('No version specified for client launch');
             return { success: false, error: 'Version is required' };
         }
+
+        // Ensure the JAR file exists, download if missing
+        const jarExists = await ensureJarExists(version);
+        if (!jarExists) {
+            return { success: false, error: `Failed to download ${version}` };
+        }
+
         const args = [];
         if (username && password) args.push(`-Drunelite.api.port=${await startCredServer(username, password)}`);
         args.push('-jar', path.join(microbotDir, version));
         if (proxy?.ip) args.push(`--proxy=${proxy.ip}`, `--proxy-type=${proxy.type || 'http'}`);
         if (username) args.push('--clean-jagex-launcher');
+
         run(args, 'client');
         return { success: true };
     });
 
-    // UPDATED OPEN-LAUNCHER HANDLER WITH microbot-launcher.jar CHECK
+    // Updated check-latest-version to also auto-download if requested
+    ipcMain.handle('check-latest-version-and-download', async () => {
+        const info = await getLatestVersionInfo();
+        if (!info) {
+            return { success: false, error: 'Could not get latest version info' };
+        }
+
+        const isDownloaded = fs.existsSync(path.join(microbotDir, info.jarName));
+
+        if (!isDownloaded) {
+            log.info('Latest version not found locally, downloading...');
+            const downloaded = await ensureJarExists(info.jarName);
+            return {
+                ...info,
+                isDownloaded: downloaded,
+                justDownloaded: downloaded
+            };
+        }
+
+        return { ...info, isDownloaded: true };
+    });
+
+    // Keep your existing open-launcher handler
     ipcMain.handle('open-launcher', async () => {
         try {
+            // Check Visual C++ Redistributable
             if (!checkVisualCppRedist()) {
                 log.warn('Visual C++ Redistributable not found');
                 const installed = await promptInstallVisualCpp();
@@ -566,6 +781,7 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
                 }
             }
 
+            // Check and download JCEF bundle if needed
             const jcefReady = await downloadJCEFBundle();
             if (!jcefReady) {
                 return {
@@ -574,6 +790,7 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
                 };
             }
 
+            // Check and download microbot-launcher.jar if needed
             const launcherReady = await downloadMicrobotLauncher();
             if (!launcherReady) {
                 return {
@@ -585,6 +802,7 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
             const launcherJar = 'microbot-launcher.jar';
             const jcefBundlePath = path.join(microbotDir, 'jcef-bundle');
 
+            // Verify the launcher JAR exists
             const launcherJarPath = path.join(microbotDir, launcherJar);
             if (!fs.existsSync(launcherJarPath)) {
                 return {
