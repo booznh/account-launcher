@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Play, Plus, Trash2, Server, X, UploadCloud, Download, Check, Users, Fingerprint, CheckCircle, AlertCircle, RefreshCw, Sparkles } from 'lucide-react';
 
-// --- Reusable Sub-components ---
-
-// A dedicated component for the update notification bar
 const UpdateNotification = ({ status, onRestart }) => {
     if (!status) return null;
 
@@ -61,6 +58,7 @@ const Toast = ({ message, type, onDismiss }) => {
         </div>
     );
 };
+
 const ProgressBar = ({ percent, status }) => (
     <div className="mt-3 overflow-hidden">
         <div className="p-3 bg-gray-900/40 backdrop-blur-md border border-gray-700/50 rounded-lg">
@@ -69,6 +67,7 @@ const ProgressBar = ({ percent, status }) => (
         </div>
     </div>
 );
+
 const ProxySettingsModal = ({ account, onClose, onSave }) => {
     const [proxy, setProxy] = useState(account.proxy || { ip: '', type: 'http' });
     return (
@@ -114,6 +113,7 @@ const JagexAccountManager = ({ jagexAccounts, selectedJagexAccounts, setSelected
         </section>
     );
 };
+
 const LegacyAccountManager = ({ legacyAccounts, setLegacyAccounts, handleLaunch }) => {
     const change = (id, f, v) => setLegacyAccounts(c => c.map(a => a.id === id ? { ...a, [f]: v } : a));
     const add = () => setLegacyAccounts(c => [...c, { id: `new-${Date.now()}`, username: '', password: '', proxy: '' }]);
@@ -159,17 +159,52 @@ const GhostliteLauncher = () => {
     const [showVersionModal, setShowVersionModal] = useState(false);
     const [downloadProgress, setDownloadProgress] = useState(null);
     const [launcherVersion, setLauncherVersion] = useState('');
-    const [updateStatus, setUpdateStatus] = useState(null); // 'available' | 'downloaded' | 'checking' | null
+    const [updateStatus, setUpdateStatus] = useState(null);
 
-    const setSelectedVersion = useCallback(async (v) => { if (window.electron) { setSelectedVersionState(v); await window.electron.writeProperties({ version_pref: v }); } }, []);
-    const fetchClientVersions = useCallback(async () => { if (!window.electron) return []; const jars = await window.electron.listJars() || []; setClientVersions(jars); return jars; }, []);
-    const fetchJagexAccounts = useCallback(async () => { if (!window.electron) return; setJagexAccounts(await window.electron.readAccounts() || []); }, []);
-    const fetchLegacyAccounts = useCallback(async () => { if (!window.electron) return; setLegacyAccounts(await window.electron.readLegacyAccounts() || []); }, []);
+    const setSelectedVersion = useCallback(async (v) => {
+        if (window.electron) {
+            setSelectedVersionState(v);
+            await window.electron.writeProperties({ version_pref: v });
+        }
+    }, []);
+
+    const loadJars = useCallback(async () => {
+        if (!window.electron) return [];
+        try {
+            const jars = await window.electron.listJars() || [];
+            setClientVersions(jars);
+
+            if (jars.length > 0 && !selectedVersion) {
+                console.log('Auto-selecting version:', jars[0]);
+                setSelectedVersionState(jars[0]);
+                await window.electron.writeProperties({ version_pref: jars[0] });
+            }
+
+            console.log('Available JARs:', jars);
+            return jars;
+        } catch (error) {
+            console.error('Failed to load JARs:', error);
+            return [];
+        }
+    }, [selectedVersion]);
+
+    const fetchJagexAccounts = useCallback(async () => {
+        if (!window.electron) return;
+        setJagexAccounts(await window.electron.readAccounts() || []);
+    }, []);
+
+    const fetchLegacyAccounts = useCallback(async () => {
+        if (!window.electron) return;
+        setLegacyAccounts(await window.electron.readLegacyAccounts() || []);
+    }, []);
+
     const getVersionStatus = useCallback(() => {
         if (!latestVersionInfo || !selectedVersion) return 'unknown';
         const current = selectedVersion.replace('microbot-', '').replace('.jar', '');
         const comp = current.localeCompare(latestVersionInfo.version, undefined, { numeric: true, sensitivity: 'base' });
-        if (comp === 0) return 'latest'; if (comp < 0) return 'outdated'; return 'newer';
+        if (comp === 0) return 'latest';
+        if (comp < 0) return 'outdated';
+        return 'newer';
     }, [latestVersionInfo, selectedVersion]);
 
     const checkForUpdates = useCallback(async (showToast = false) => {
@@ -177,13 +212,17 @@ const GhostliteLauncher = () => {
         setIsCheckingUpdate(true);
         try {
             const [latest, all] = await Promise.all([window.electron.checkLatestVersion(), window.electron.getAllVersions()]);
-            setLatestVersionInfo(latest); setAllVersionsInfo(all);
+            setLatestVersionInfo(latest);
+            setAllVersionsInfo(all);
             if (showToast) setToast({ type: 'info', message: latest ? `Latest version is v${latest.version}` : 'Update check failed.' });
-        } catch (e) { if (showToast) setToast({ type: 'error', message: 'Failed to check for updates.' }); }
-        finally { setIsCheckingUpdate(false); }
+        } catch (e) {
+            if (showToast) setToast({ type: 'error', message: 'Failed to check for updates.' });
+        }
+        finally {
+            setIsCheckingUpdate(false);
+        }
     }, []);
 
-    // New function for manual launcher update check
     const checkForLauncherUpdates = useCallback(async () => {
         if (!window.electron) return;
 
@@ -194,13 +233,12 @@ const GhostliteLauncher = () => {
             const result = await window.electron.checkForUpdates();
 
             if (result.success) {
-                // The auto-updater events will handle the UI updates
                 setTimeout(() => {
                     if (updateStatus === 'checking') {
                         setUpdateStatus(null);
                         setToast({ type: 'info', message: 'You are running the latest version!' });
                     }
-                }, 5000); // Clear checking status after 5 seconds if no update found
+                }, 5000);
             } else {
                 setUpdateStatus(null);
                 setToast({ type: 'error', message: 'Failed to check for updates' });
@@ -213,12 +251,28 @@ const GhostliteLauncher = () => {
 
     useEffect(() => {
         if (window.electron) {
+            const handleAppReady = () => {
+                console.log('App initialization completed, refreshing JAR list...');
+                setTimeout(() => {
+                    loadJars();
+                }, 1000);
+            };
+
+            const handleDownloadComplete = (progress) => {
+                if (progress && progress.percent === 100) {
+                    console.log('Download completed, refreshing JAR list...');
+                    setTimeout(() => {
+                        loadJars();
+                    }, 1000);
+                }
+            };
+
             const init = async () => {
                 try {
                     const version = await window.electron.getLauncherVersion();
                     setLauncherVersion(version);
                     await Promise.all([fetchJagexAccounts(), fetchLegacyAccounts()]);
-                    const [props, jars] = await Promise.all([window.electron.readProperties(), fetchClientVersions()]);
+                    const [props, jars] = await Promise.all([window.electron.readProperties(), loadJars()]);
                     if (jars.length > 0) setSelectedVersionState(props.version_pref && jars.includes(props.version_pref) ? props.version_pref : jars[0]);
                 } catch (error) {
                     console.error("Initialization failed:", error);
@@ -227,22 +281,31 @@ const GhostliteLauncher = () => {
             };
             init();
 
-            // Listen for events from main.js
             const cleanupCheckingForUpdate = window.electron.on('checking-for-update', () => setUpdateStatus('checking'));
             const cleanupUpdateAvailable = window.electron.on('update-available', () => setUpdateStatus('available'));
             const cleanupUpdateDownloaded = window.electron.on('update-downloaded', () => setUpdateStatus('downloaded'));
             const cleanupUpdateNotAvailable = window.electron.on('update-not-available', () => {
                 setUpdateStatus(null);
-                // Don't show toast here as it would be annoying on startup
             });
             const cleanupUpdateError = window.electron.on('update-error', (error) => {
                 setUpdateStatus(null);
                 setToast({ type: 'error', message: `Update check failed: ${error}` });
             });
             const cleanupAccountsChanged = window.electron.on('accounts-file-changed', fetchJagexAccounts);
-            const cleanupDownloadProgress = window.electron.on('download-progress', setDownloadProgress);
+            const cleanupDownloadProgress = window.electron.on('download-progress', (progress) => {
+                setDownloadProgress(progress);
+                handleDownloadComplete(progress);
+            });
+            const cleanupAppInitialized = window.electron.on('app-initialized', handleAppReady);
 
-            // Cleanup listeners when component unmounts
+            // ADD THIS LINE HERE:
+            const cleanupJcefClosed = window.electron.on('jcef-closed', () => {
+                console.log('JCEF window closed, refreshing account list...');
+                setTimeout(() => {
+                    fetchJagexAccounts();
+                }, 500);
+            });
+
             return () => {
                 cleanupCheckingForUpdate();
                 cleanupUpdateAvailable();
@@ -251,9 +314,11 @@ const GhostliteLauncher = () => {
                 cleanupUpdateError();
                 cleanupAccountsChanged();
                 cleanupDownloadProgress();
+                cleanupAppInitialized();
+                cleanupJcefClosed(); // ADD THIS CLEANUP TOO
             };
         }
-    }, [fetchJagexAccounts, fetchLegacyAccounts, fetchClientVersions]);
+    }, [fetchJagexAccounts, fetchLegacyAccounts, loadJars]);
 
     const handleDownload = async (promise) => {
         if (!window.electron) return;
@@ -263,20 +328,28 @@ const GhostliteLauncher = () => {
             if (res.success && res.fileName) {
                 setDownloadProgress({ percent: 100, status: 'Complete!' });
                 await window.electron.deleteJars({ keep: [res.fileName] });
-                await fetchClientVersions();
+                await loadJars();
                 setSelectedVersion(res.fileName);
                 setTimeout(() => {
                     setDownloadProgress(null);
                     setToast({ type: 'success', message: `v${res.fileName.match(/(\d+\.?)+/)?.[0]} is ready!` });
                     checkForUpdates();
                 }, 1500);
-            } else { throw new Error(res.error || 'Download failed.'); }
-        } catch (e) { setDownloadProgress(null); setToast({ type: 'error', message: `Download failed: ${e.message}` }); }
+            } else {
+                throw new Error(res.error || 'Download failed.');
+            }
+        } catch (e) {
+            setDownloadProgress(null);
+            setToast({ type: 'error', message: `Download failed: ${e.message}` });
+        }
     };
 
     const handleLaunch = async (opts) => {
         if (!window.electron) return;
-        if (!selectedVersion) { setToast({ type: 'error', message: 'No client version selected.' }); return; }
+        if (!selectedVersion) {
+            setToast({ type: 'error', message: 'No client version selected.' });
+            return;
+        }
         if (opts.accountId) await window.electron.overwriteCredentialProperties(opts);
         await window.electron.openClient({
             version: selectedVersion,
@@ -359,15 +432,23 @@ const GhostliteLauncher = () => {
     const handleMultiLaunch = async () => {
         if (!window.electron || selectedJagexAccounts.size === 0) return;
         const toLaunch = jagexAccounts.filter(a => selectedJagexAccounts.has(a.accountId));
-        for (const acc of toLaunch) { await handleLaunch(acc); await new Promise(r => setTimeout(r, 2000)); }
+        for (const acc of toLaunch) {
+            await handleLaunch(acc);
+            await new Promise(r => setTimeout(r, 2000));
+        }
     };
 
     const handleDeleteJagex = async (acc) => {
         if (!window.electron) return;
         if (window.confirm(`Are you sure you want to remove ${acc.displayName}? This cannot be undone.`)) {
             const res = await window.electron.removeJagexAccount(acc.accountId);
-            if (res.success) { setToast({ type: 'success', message: 'Account removed.' }); fetchJagexAccounts(); }
-            else { setToast({ type: 'error', message: `Failed to remove: ${res.error}` }); }
+            if (res.success) {
+                setToast({ type: 'success', message: 'Account removed.' });
+                fetchJagexAccounts();
+            }
+            else {
+                setToast({ type: 'error', message: `Failed to remove: ${res.error}` });
+            }
         }
     };
 
@@ -418,7 +499,7 @@ const GhostliteLauncher = () => {
                             {getVersionStatus() === 'outdated' && latestVersionInfo && <button onClick={() => handleDownload(window.electron.downloadLatestVersion())} disabled={!!downloadProgress} className="px-3 py-1.5 rounded-md bg-amber-600 text-white hover:bg-amber-700 flex items-center space-x-1.5 disabled:opacity-50 text-sm font-medium"><Download size={14} /><span>Update to v{latestVersionInfo.version}</span></button>}
                             <button onClick={() => setShowVersionModal(true)} className="px-3 py-1.5 rounded-md bg-custom-blue text-white hover:brightness-90 flex items-center space-x-1.5 text-sm font-medium"><Download size={14} /><span>Browse</span></button>
                             <button onClick={() => checkForUpdates(true)} disabled={isCheckingUpdate} className="p-2 rounded-md bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50"><RefreshCw size={14} className={isCheckingUpdate ? 'animate-spin' : ''} /></button>
-                            <button onClick={() => window.electron.loadCustomJar().then(fetchClientVersions)} className="px-3 py-1.5 rounded-md bg-gray-600 text-white hover:bg-gray-700 flex items-center space-x-1.5 text-sm font-medium"><UploadCloud size={14} /><span>Custom</span></button>
+                            <button onClick={() => window.electron.loadCustomJar().then(loadJars)} className="px-3 py-1.5 rounded-md bg-gray-600 text-white hover:bg-gray-700 flex items-center space-x-1.5 text-sm font-medium"><UploadCloud size={14} /><span>Custom</span></button>
                         </div>
                         {downloadProgress && <ProgressBar {...downloadProgress} />}
                     </div>

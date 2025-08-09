@@ -9,6 +9,7 @@ const { spawn, exec } = require('child_process');
 const os = require('os');
 const { v4: uuidv4 } = require('uuid');
 const { autoUpdater } = require('electron-updater');
+const AdmZip = require('adm-zip');
 
 autoUpdater.logger = log;
 autoUpdater.logger.transports.file.level = 'info';
@@ -25,6 +26,13 @@ const jcefProcesses = [];
 
 const microbotDir = path.join(os.homedir(), '.microbot');
 if (!fs.existsSync(microbotDir)) fs.mkdirSync(microbotDir, { recursive: true });
+
+function ensureDirectoryExists(dirPath) {
+    if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+        log.info(`Created directory: ${dirPath}`);
+    }
+}
 
 const checkVisualCppRedist = () => {
     const vcRedistPaths = [
@@ -43,91 +51,55 @@ const checkVisualCppRedist = () => {
     return true;
 };
 
-async function downloadMicrobotLauncher() {
-    const launcherJarPath = path.join(microbotDir, 'microbot-launcher.jar');
+// Add this debug function to your electron.js to check account locations
 
-    if (fs.existsSync(launcherJarPath)) {
-        log.info('microbot-launcher.jar already exists');
-        return true;
-    }
+function debugAccountLocations() {
+    const possiblePaths = [
+        path.join(os.homedir(), '.microbot', 'accounts.json'),
+        path.join(os.homedir(), '.runelite', 'accounts.json'),
+        path.join(os.homedir(), '.jagex', 'accounts.json'),
+        path.join(os.homedir(), 'AppData', 'Local', 'Jagex', 'accounts.json'),
+        path.join(os.homedir(), 'AppData', 'Roaming', 'Jagex', 'accounts.json'),
+        path.join(os.homedir(), 'AppData', 'Local', 'RuneLite', 'accounts.json'),
+        path.join(os.homedir(), 'AppData', 'Roaming', 'RuneLite', 'accounts.json'),
+        path.join(microbotDir, 'accounts.json'),
+    ];
 
-    try {
-        log.info('Downloading microbot-launcher.jar...');
+    log.info('=== DEBUGGING ACCOUNT LOCATIONS ===');
 
-        if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('download-progress', {
-                percent: 0,
-                status: 'Downloading microbot-launcher.jar...'
-            });
-        }
+    possiblePaths.forEach(filePath => {
+        if (fs.existsSync(filePath)) {
+            try {
+                const content = fs.readFileSync(filePath, 'utf8');
+                log.info(`✅ FOUND: ${filePath}`);
+                log.info(`Size: ${content.length} bytes`);
+                log.info(`Content preview: ${content.substring(0, 200)}...`);
 
-        const filestorage = 'https://files.microbot.cloud';
-        const launcherUrl = `${filestorage}/assets/microbot-launcher/microbot-launcher.jar`;
-
-        log.info(`Downloading launcher from: ${launcherUrl}`);
-
-        const response = await axios({
-            method: 'get',
-            url: launcherUrl,
-            responseType: 'arraybuffer',
-            timeout: 300000, // 5 minutes
-            onDownloadProgress: (progressEvent) => {
-                const percent = progressEvent.total
-                    ? Math.round((progressEvent.loaded * 100) / progressEvent.total)
-                    : 0;
-
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('download-progress', {
-                        percent,
-                        status: `Downloading microbot-launcher.jar... ${percent}%`
-                    });
+                // Try to parse as JSON
+                try {
+                    const parsed = JSON.parse(content);
+                    log.info(`Parsed JSON with ${Array.isArray(parsed) ? parsed.length : Object.keys(parsed).length} items`);
+                } catch (parseErr) {
+                    log.info('Not valid JSON');
                 }
+
+                log.info('---');
+            } catch (err) {
+                log.error(`Error reading ${filePath}:`, err.message);
             }
-        });
-
-        fs.writeFileSync(launcherJarPath, response.data);
-
-        if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('download-progress', {
-                percent: 100,
-                status: 'microbot-launcher.jar downloaded successfully!'
-            });
-
-            setTimeout(() => {
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('download-progress', null);
-                }
-            }, 2000);
+        } else {
+            log.info(`❌ NOT FOUND: ${filePath}`);
         }
+    });
 
-        log.info('microbot-launcher.jar downloaded successfully');
-        return true;
-
-    } catch (error) {
-        log.error('Failed to download microbot-launcher.jar:', error);
-
-        if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('download-progress', null);
-        }
-
-        if (mainWindow && !mainWindow.isDestroyed()) {
-            const result = await dialog.showMessageBox(mainWindow, {
-                type: 'error',
-                title: 'Download Failed',
-                message: 'Failed to download microbot-launcher.jar',
-                detail: `Error: ${error.message}\n\nPlease check your internet connection and try again.`,
-                buttons: ['Try Again', 'Cancel'],
-                defaultId: 0
-            });
-
-            if (result.response === 0) {
-                return await downloadMicrobotLauncher();
-            }
-        }
-
-        return false;
-    }
+    log.info('=== END DEBUG ===');
 }
+
+// Add this IPC handler
+ipcMain.handle('debug-account-locations', async () => {
+    debugAccountLocations();
+    return { success: true };
+});
 
 const promptInstallVisualCpp = async () => {
     const result = await dialog.showMessageBox(mainWindow, {
@@ -147,6 +119,18 @@ const promptInstallVisualCpp = async () => {
 
     return false;
 };
+
+function copyRecursively(src, dest) {
+    const stats = fs.statSync(src);
+    if (stats.isDirectory()) {
+        ensureDirectoryExists(dest);
+        fs.readdirSync(src).forEach(file => {
+            copyRecursively(path.join(src, file), path.join(dest, file));
+        });
+    } else {
+        fs.copyFileSync(src, dest);
+    }
+}
 
 async function downloadJCEFBundle() {
     ensureDirectoryExists(microbotDir);
@@ -206,7 +190,6 @@ async function downloadJCEFBundle() {
             });
         }
 
-        const AdmZip = require('adm-zip');
         const zip = new AdmZip(archivePath);
 
         const tempExtractPath = path.join(microbotDir, 'temp-jcef-extract');
@@ -270,17 +253,6 @@ async function downloadJCEFBundle() {
             log.error('Could not read final JCEF bundle directory:', err);
         }
 
-        const essentialFiles = ['jcef.jar'];
-        const missingFiles = essentialFiles.filter(file =>
-            !fs.existsSync(path.join(jcefBundlePath, file))
-        );
-
-        if (missingFiles.length > 0) {
-            log.warn('Some essential JCEF files are missing:', missingFiles);
-        } else {
-            log.info('All essential JCEF files found!');
-        }
-
         return true;
 
     } catch (error) {
@@ -309,104 +281,91 @@ async function downloadJCEFBundle() {
     }
 }
 
-function copyRecursively(src, dest) {
-    const stats = fs.statSync(src);
-    if (stats.isDirectory()) {
-        ensureDirectoryExists(dest);
-        fs.readdirSync(src).forEach(file => {
-            copyRecursively(path.join(src, file), path.join(dest, file));
-        });
-    } else {
-        fs.copyFileSync(src, dest);
+async function downloadMicrobotLauncher() {
+    ensureDirectoryExists(microbotDir);
+
+    const launcherJarPath = path.join(microbotDir, 'microbot-launcher.jar');
+
+    if (fs.existsSync(launcherJarPath)) {
+        log.info('microbot-launcher.jar already exists');
+        return true;
     }
-}
 
-async function extractRarFile(archivePath, extractPath) {
     try {
-        // Option 1: Try using 7-Zip if available
-        const { spawn } = require('child_process');
+        log.info('Downloading microbot-launcher.jar...');
 
-        // Try 7zip first (most common)
-        const sevenZipPaths = [
-            'C:\\Program Files\\7-Zip\\7z.exe',
-            'C:\\Program Files (x86)\\7-Zip\\7z.exe',
-            '7z' // If it's in PATH
-        ];
-
-        for (const zipPath of sevenZipPaths) {
-            try {
-                await new Promise((resolve, reject) => {
-                    const extractProcess = spawn(zipPath, ['x', archivePath, `-o${extractPath}`, '-y'], {
-                        stdio: 'pipe'
-                    });
-
-                    extractProcess.on('close', (code) => {
-                        if (code === 0) {
-                            log.info('RAR extracted successfully with 7-Zip');
-                            resolve();
-                        } else {
-                            reject(new Error(`7-Zip extraction failed with code ${code}`));
-                        }
-                    });
-
-                    extractProcess.on('error', (error) => {
-                        reject(error);
-                    });
-                });
-                return; // Success, exit function
-            } catch (err) {
-                log.warn(`Failed to extract with ${zipPath}:`, err.message);
-                continue; // Try next path
-            }
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('download-progress', {
+                percent: 0,
+                status: 'Downloading microbot-launcher.jar...'
+            });
         }
 
-        // Option 2: Try WinRAR if 7-Zip failed
-        const winrarPaths = [
-            'C:\\Program Files\\WinRAR\\unrar.exe',
-            'C:\\Program Files (x86)\\WinRAR\\unrar.exe',
-            'unrar' // If it's in PATH
-        ];
+        const filestorage = 'https://files.microbot.cloud';
+        const launcherUrl = `${filestorage}/assets/microbot-launcher/microbot-launcher.jar`;
 
-        for (const rarPath of winrarPaths) {
-            try {
-                await new Promise((resolve, reject) => {
-                    const extractProcess = spawn(rarPath, ['x', archivePath, extractPath], {
-                        stdio: 'pipe'
-                    });
+        log.info(`Downloading launcher from: ${launcherUrl}`);
 
-                    extractProcess.on('close', (code) => {
-                        if (code === 0) {
-                            log.info('RAR extracted successfully with WinRAR');
-                            resolve();
-                        } else {
-                            reject(new Error(`WinRAR extraction failed with code ${code}`));
-                        }
-                    });
+        const response = await axios({
+            method: 'get',
+            url: launcherUrl,
+            responseType: 'arraybuffer',
+            timeout: 300000,
+            onDownloadProgress: (progressEvent) => {
+                const percent = progressEvent.total
+                    ? Math.round((progressEvent.loaded * 100) / progressEvent.total)
+                    : 0;
 
-                    extractProcess.on('error', (error) => {
-                        reject(error);
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('download-progress', {
+                        percent,
+                        status: `Downloading microbot-launcher.jar... ${percent}%`
                     });
-                });
-                return; // Success, exit function
-            } catch (err) {
-                log.warn(`Failed to extract with ${rarPath}:`, err.message);
-                continue; // Try next path
+                }
             }
+        });
+
+        fs.writeFileSync(launcherJarPath, response.data);
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('download-progress', {
+                percent: 100,
+                status: 'microbot-launcher.jar downloaded successfully!'
+            });
+
+            setTimeout(() => {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('download-progress', null);
+                }
+            }, 2000);
         }
 
-        // If we get here, no extraction method worked
-        throw new Error('No RAR extraction tool found. Please install 7-Zip or WinRAR.');
+        log.info('microbot-launcher.jar downloaded successfully');
+        return true;
 
     } catch (error) {
-        log.error('RAR extraction failed:', error);
-        throw error;
-    }
-}
+        log.error('Failed to download microbot-launcher.jar:', error);
 
-function ensureDirectoryExists(dirPath) {
-    if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
-        log.info(`Created directory: ${dirPath}`);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('download-progress', null);
+        }
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            const result = await dialog.showMessageBox(mainWindow, {
+                type: 'error',
+                title: 'Download Failed',
+                message: 'Failed to download microbot-launcher.jar',
+                detail: `Error: ${error.message}\n\nPlease check your internet connection and try again.`,
+                buttons: ['Try Again', 'Cancel'],
+                defaultId: 0
+            });
+
+            if (result.response === 0) {
+                return await downloadMicrobotLauncher();
+            }
+        }
+
+        return false;
     }
 }
 
@@ -430,9 +389,114 @@ async function getLatestVersionInfo() {
     return null;
 }
 
+function setupAutoDownloadOnStartup() {
+    const ensureAtLeastOneJarExists = async () => {
+        try {
+            const existingJars = fs.readdirSync(microbotDir)
+                .filter(f => f.startsWith('microbot-') && f.endsWith('.jar'))
+                .filter(f => f !== 'microbot-launcher.jar');
+
+            if (existingJars.length > 0) {
+                log.info(`Found ${existingJars.length} existing client JAR(s):`, existingJars);
+                return false; // Didn't download anything new
+            }
+
+            log.info('No client JAR files found, downloading latest version...');
+
+            const info = await getLatestVersionInfo();
+            if (!info) {
+                log.error('Could not get latest version info for auto-download');
+                return false;
+            }
+
+            log.info(`Auto-downloading latest version: ${info.version}`);
+
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('download-progress', {
+                    percent: 0,
+                    status: `Auto-downloading ${info.jarName}...`
+                });
+            }
+
+            const response = await axios({
+                method: 'get',
+                url: info.downloadUrl,
+                responseType: 'arraybuffer',
+                timeout: 60000,
+                onDownloadProgress: (progressEvent) => {
+                    const percent = progressEvent.total
+                        ? Math.round((progressEvent.loaded * 100) / progressEvent.total)
+                        : 0;
+
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('download-progress', {
+                            percent,
+                            status: `Auto-downloading ${info.jarName}... ${percent}%`
+                        });
+                    }
+                }
+            });
+
+            const jarPath = path.join(microbotDir, info.jarName);
+            fs.writeFileSync(jarPath, response.data);
+
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('download-progress', {
+                    percent: 100,
+                    status: `${info.jarName} downloaded successfully!`
+                });
+
+                setTimeout(() => {
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('download-progress', null);
+                    }
+                }, 3000);
+            }
+
+            log.info(`Successfully auto-downloaded: ${info.jarName}`);
+            return true; // Downloaded something new
+
+        } catch (error) {
+            log.error('Failed to auto-download latest version:', error);
+
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('download-progress', null);
+            }
+
+            return false;
+        }
+    };
+
+    // Add the IPC handler
+    ipcMain.handle('ensure-client-jar-exists', async () => {
+        return await ensureAtLeastOneJarExists();
+    });
+
+    // IMPORTANT: Return the function so initializeApp can use it
+    return { ensureAtLeastOneJarExists };
+}
+
+async function initializeApp() {
+    try {
+        const { ensureAtLeastOneJarExists } = setupAutoDownloadOnStartup();
+
+        log.info('Checking for existing client JARs...');
+        const downloadedNewJar = await ensureAtLeastOneJarExists();
+
+        log.info('App initialization complete');
+
+        // Notify frontend that initialization is complete
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('app-initialized', { downloadedNewJar });
+        }
+
+    } catch (error) {
+        log.error('Failed to initialize app:', error);
+    }
+}
+
 let mainWindow;
 
-// --- Auto-Updater Event Handling ---
 autoUpdater.on('checking-for-update', () => {
     log.info('Checking for update...');
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -489,7 +553,6 @@ async function createWindow() {
         show: true,
         title: `Ghostlite Launcher v${app.getVersion()}`,
         center: true,
-        icon: path.join(__dirname, 'images/rounded-icon.png'),
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -513,6 +576,10 @@ async function createWindow() {
     });
     mainWindow.on('closed', () => (mainWindow = null));
     watchAccountsFile(mainWindow);
+
+    setTimeout(async () => {
+        await initializeApp();
+    }, 2000);
 }
 
 function setupIpcHandlers() {
@@ -616,6 +683,25 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
             p.unref();
         } else if (processType === 'jcef') {
             jcefProcesses.push(p);
+
+            // Listen for JCEF process closure and refresh accounts
+            p.on('close', (code) => {
+                log.info(`JCEF process closed with code: ${code}`);
+
+                // Wait a moment for files to be written, then refresh accounts
+                setTimeout(() => {
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        log.info('Refreshing account list after JCEF closure');
+                        mainWindow.webContents.send('jcef-closed');
+                        mainWindow.webContents.send('accounts-file-changed');
+                    }
+                }, 1000); // 1 second delay to ensure files are written
+            });
+
+            p.on('error', (error) => {
+                log.error('JCEF process error:', error);
+            });
+
         } else {
             childProcesses.push(p);
         }
@@ -630,7 +716,6 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
 
     const run = (args, processType = 'other') => isJava(ok => ok ? execJar(args, processType) : dialog.showMessageBox({ type: 'error', title: 'Java Not Found', message: 'Java is required. Download now?', buttons: ['Yes', 'No'] }).then(r => r.response === 0 && shell.openExternal('https://www.oracle.com/java/technologies/downloads/')));
 
-    // Helper function to download a specific version if missing
     const ensureJarExists = async (version) => {
         const jarPath = path.join(microbotDir, version);
 
@@ -642,7 +727,6 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
         log.info(`JAR file missing, downloading: ${version}`);
 
         try {
-            // Show download progress
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('download-progress', {
                     percent: 0,
@@ -650,7 +734,6 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
                 });
             }
 
-            // Extract version number from filename (e.g., microbot-1.9.7.jar -> 1.9.7)
             const versionMatch = version.match(/microbot-(.+)\.jar$/);
             if (!versionMatch) {
                 throw new Error(`Invalid JAR filename format: ${version}`);
@@ -688,7 +771,6 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
                     status: `${version} downloaded successfully!`
                 });
 
-                // Clear progress after 2 seconds
                 setTimeout(() => {
                     if (mainWindow && !mainWindow.isDestroyed()) {
                         mainWindow.webContents.send('download-progress', null);
@@ -718,7 +800,6 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
         }
     };
 
-    // UPDATED open-client handler with auto-download
     ipcMain.handle('open-client', async (event, options) => {
         log.info('open-client called with options:', JSON.stringify(options));
         const { version, proxy, username, password } = options || {};
@@ -728,7 +809,6 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
             return { success: false, error: 'Version is required' };
         }
 
-        // Ensure the JAR file exists, download if missing
         const jarExists = await ensureJarExists(version);
         if (!jarExists) {
             return { success: false, error: `Failed to download ${version}` };
@@ -744,7 +824,6 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
         return { success: true };
     });
 
-    // Updated check-latest-version to also auto-download if requested
     ipcMain.handle('check-latest-version-and-download', async () => {
         const info = await getLatestVersionInfo();
         if (!info) {
@@ -766,10 +845,8 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
         return { ...info, isDownloaded: true };
     });
 
-    // Keep your existing open-launcher handler
     ipcMain.handle('open-launcher', async () => {
         try {
-            // Check Visual C++ Redistributable
             if (!checkVisualCppRedist()) {
                 log.warn('Visual C++ Redistributable not found');
                 const installed = await promptInstallVisualCpp();
@@ -781,7 +858,6 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
                 }
             }
 
-            // Check and download JCEF bundle if needed
             const jcefReady = await downloadJCEFBundle();
             if (!jcefReady) {
                 return {
@@ -790,7 +866,6 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
                 };
             }
 
-            // Check and download microbot-launcher.jar if needed
             const launcherReady = await downloadMicrobotLauncher();
             if (!launcherReady) {
                 return {
@@ -802,7 +877,6 @@ function setupGameLaunchHandlers({ ipcMain, spawn, path, microbotDir, log, dialo
             const launcherJar = 'microbot-launcher.jar';
             const jcefBundlePath = path.join(microbotDir, 'jcef-bundle');
 
-            // Verify the launcher JAR exists
             const launcherJarPath = path.join(microbotDir, launcherJar);
             if (!fs.existsSync(launcherJarPath)) {
                 return {
@@ -843,18 +917,15 @@ function setupVersionHandlers({ ipcMain, microbotDir, fs, path }) {
         .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
 
     ipcMain.handle('list-jars', async () => listJars());
-
     ipcMain.handle('delete-jars', async (event, { keep = [] }) => {
         listJars().filter(j => !keep.includes(j)).forEach(j => fs.unlinkSync(path.join(microbotDir, j)));
         return { success: true };
     });
-
     ipcMain.handle('check-latest-version', async () => {
         const info = await getLatestVersionInfo();
         if (info) return { ...info, isDownloaded: fs.existsSync(path.join(microbotDir, info.jarName)) };
         return null;
     });
-
     ipcMain.handle('get-all-versions', async () => {
         const info = await getLatestVersionInfo();
         return { latest: info, allVersions: info?.allVersions || [] };
@@ -901,7 +972,7 @@ const killJcefProcesses = () => {
                 if (error && !error.message.includes('not found')) { log.warn(`Command failed: ${cmd}`, error.message); }
             });
         });
-    } else { // macOS/Linux
+    } else {
         exec('pkill -f jcef', (error) => { if (error && error.code !== 1) { log.warn('Could not kill JCEF processes on Unix:', error.message); } });
         exec('pkill -f microbot-launcher', (error) => { if (error && error.code !== 1) { log.warn('Could not kill launcher processes on Unix:', error.message); } });
     }
