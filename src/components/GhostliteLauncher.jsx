@@ -33,6 +33,15 @@ const UpdateNotification = ({ status, onRestart }) => {
         );
     }
 
+    if (status === 'checking') {
+        return (
+            <div className="bg-purple-500/90 text-white p-3 rounded-lg flex items-center space-x-2 shadow-lg mb-4">
+                <RefreshCw size={16} className="animate-spin" />
+                <span className="font-medium text-sm">Checking for launcher updates...</span>
+            </div>
+        );
+    }
+
     return null;
 };
 
@@ -71,21 +80,6 @@ const ProxySettingsModal = ({ account, onClose, onSave }) => {
                     <select value={proxy.type} onChange={(e) => setProxy({ ...proxy, type: e.target.value })} className="w-full bg-gray-800/50 border border-gray-600 rounded-md px-3 py-1.5 text-white focus:ring-2 focus:ring-custom-blue"><option value="http">HTTP</option><option value="socks">SOCKS</option></select>
                 </div>
                 <div className="mt-5 flex justify-end space-x-2"><button onClick={onClose} className="px-3 py-1.5 rounded-md bg-gray-700 text-white hover:bg-gray-600">Cancel</button><button onClick={() => { onSave(account.accountId, proxy); onClose(); }} className="px-3 py-1.5 rounded-md bg-custom-blue text-white hover:brightness-90">Save</button></div>
-            </div>
-        </div>
-    );
-};
-const VersionSelectionModal = ({ onClose, onDownload, latestVersionInfo, allVersionsInfo, clientVersions }) => {
-    const [selectedVersion, setSelectedVersionLocal] = useState('');
-    return (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 flex items-center justify-center" onClick={onClose}>
-            <div className="bg-gradient-to-br from-gray-900/95 to-black/95 backdrop-blur-xl border border-gray-700/50 rounded-xl p-5 w-full max-w-xl mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between mb-4"><h2 className="text-lg font-bold text-white">Select Version</h2><button onClick={onClose} className="p-2 rounded-full text-gray-400 hover:bg-gray-800/50"><X size={18} /></button></div>
-                {latestVersionInfo && <div className="mb-3 p-3 bg-emerald-900/20 rounded-lg border border-emerald-800/50"><p className="text-sm text-emerald-300">Recommended: <span className="font-medium text-emerald-200">v{latestVersionInfo.version}</span></p></div>}
-                <div className="space-y-2">
-                    {allVersionsInfo.allVersions?.map(v => (<div key={v} className={`p-2 rounded-lg border cursor-pointer ${selectedVersion === v ? 'border-custom-blue bg-custom-blue/10' : 'border-gray-700 hover:bg-gray-800/50'}`} onClick={() => setSelectedVersionLocal(v)}><div className="flex items-center justify-between"><div className="flex items-center space-x-3"><span className="font-medium text-white">v{v}</span>{v === latestVersionInfo?.version && <span className="px-2 py-0.5 text-xs bg-emerald-900/30 text-emerald-200 rounded-full">Latest</span>}</div>{clientVersions.includes(`microbot-${v}.jar`) && <span className="text-xs text-gray-400">Downloaded</span>}</div></div>))}
-                </div>
-                <div className="mt-5 flex justify-end space-x-2"><button onClick={onClose} className="px-3 py-1.5 rounded-md bg-gray-700 text-white hover:bg-gray-600">Cancel</button><button onClick={() => { if (selectedVersion) { onDownload(selectedVersion); onClose(); } }} disabled={!selectedVersion} className="px-3 py-1.5 rounded-md bg-custom-blue text-white hover:brightness-90 disabled:opacity-50">Download</button></div>
             </div>
         </div>
     );
@@ -165,7 +159,7 @@ const GhostliteLauncher = () => {
     const [showVersionModal, setShowVersionModal] = useState(false);
     const [downloadProgress, setDownloadProgress] = useState(null);
     const [launcherVersion, setLauncherVersion] = useState('');
-    const [updateStatus, setUpdateStatus] = useState(null); // 'available' | 'downloaded' | null
+    const [updateStatus, setUpdateStatus] = useState(null); // 'available' | 'downloaded' | 'checking' | null
 
     const setSelectedVersion = useCallback(async (v) => { if (window.electron) { setSelectedVersionState(v); await window.electron.writeProperties({ version_pref: v }); } }, []);
     const fetchClientVersions = useCallback(async () => { if (!window.electron) return []; const jars = await window.electron.listJars() || []; setClientVersions(jars); return jars; }, []);
@@ -189,6 +183,34 @@ const GhostliteLauncher = () => {
         finally { setIsCheckingUpdate(false); }
     }, []);
 
+    // New function for manual launcher update check
+    const checkForLauncherUpdates = useCallback(async () => {
+        if (!window.electron) return;
+
+        try {
+            setUpdateStatus('checking');
+            setToast({ type: 'info', message: 'Checking for launcher updates...' });
+
+            const result = await window.electron.checkForUpdates();
+
+            if (result.success) {
+                // The auto-updater events will handle the UI updates
+                setTimeout(() => {
+                    if (updateStatus === 'checking') {
+                        setUpdateStatus(null);
+                        setToast({ type: 'info', message: 'You are running the latest version!' });
+                    }
+                }, 5000); // Clear checking status after 5 seconds if no update found
+            } else {
+                setUpdateStatus(null);
+                setToast({ type: 'error', message: 'Failed to check for updates' });
+            }
+        } catch (error) {
+            setUpdateStatus(null);
+            setToast({ type: 'error', message: 'Failed to check for updates' });
+        }
+    }, [updateStatus]);
+
     useEffect(() => {
         if (window.electron) {
             const init = async () => {
@@ -206,15 +228,27 @@ const GhostliteLauncher = () => {
             init();
 
             // Listen for events from main.js
+            const cleanupCheckingForUpdate = window.electron.on('checking-for-update', () => setUpdateStatus('checking'));
             const cleanupUpdateAvailable = window.electron.on('update-available', () => setUpdateStatus('available'));
             const cleanupUpdateDownloaded = window.electron.on('update-downloaded', () => setUpdateStatus('downloaded'));
+            const cleanupUpdateNotAvailable = window.electron.on('update-not-available', () => {
+                setUpdateStatus(null);
+                // Don't show toast here as it would be annoying on startup
+            });
+            const cleanupUpdateError = window.electron.on('update-error', (error) => {
+                setUpdateStatus(null);
+                setToast({ type: 'error', message: `Update check failed: ${error}` });
+            });
             const cleanupAccountsChanged = window.electron.on('accounts-file-changed', fetchJagexAccounts);
             const cleanupDownloadProgress = window.electron.on('download-progress', setDownloadProgress);
 
             // Cleanup listeners when component unmounts
             return () => {
+                cleanupCheckingForUpdate();
                 cleanupUpdateAvailable();
                 cleanupUpdateDownloaded();
+                cleanupUpdateNotAvailable();
+                cleanupUpdateError();
                 cleanupAccountsChanged();
                 cleanupDownloadProgress();
             };
@@ -252,6 +286,76 @@ const GhostliteLauncher = () => {
         });
     };
 
+    const VersionSelectionModal = ({ onClose, onDownload, latestVersionInfo, allVersionsInfo, clientVersions }) => {
+        const [selectedVersion, setSelectedVersionLocal] = useState('');
+        return (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 flex items-center justify-center" onClick={onClose}>
+                <div className="bg-gradient-to-br from-gray-900/95 to-black/95 backdrop-blur-xl border border-gray-700/50 rounded-xl p-5 w-full max-w-xl mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-lg font-bold text-white">Select Version</h2>
+                        <button onClick={onClose} className="p-2 rounded-full text-gray-400 hover:bg-gray-800/50">
+                            <X size={18} />
+                        </button>
+                    </div>
+                    {latestVersionInfo && (
+                        <div className="mb-3 p-3 bg-emerald-900/20 rounded-lg border border-emerald-800/50">
+                            <p className="text-sm text-emerald-300">
+                                Recommended: <span className="font-medium text-emerald-200">v{latestVersionInfo.version}</span>
+                            </p>
+                        </div>
+                    )}
+                    <div className="space-y-2">
+                        {allVersionsInfo.allVersions?.map(v => (
+                            <div
+                                key={v}
+                                className={`p-2 rounded-lg border cursor-pointer ${
+                                    selectedVersion === v
+                                        ? 'border-custom-blue bg-custom-blue/10'
+                                        : 'border-gray-700 hover:bg-gray-800/50'
+                                }`}
+                                onClick={() => setSelectedVersionLocal(v)}
+                            >
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center space-x-3">
+                                        <span className="font-medium text-white">v{v}</span>
+                                        {v === latestVersionInfo?.version && (
+                                            <span className="px-2 py-0.5 text-xs bg-emerald-900/30 text-emerald-200 rounded-full">
+                                                Latest
+                                            </span>
+                                        )}
+                                    </div>
+                                    {clientVersions.includes(`microbot-${v}.jar`) && (
+                                        <span className="text-xs text-gray-400">Downloaded</span>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="mt-5 flex justify-end space-x-2">
+                        <button
+                            onClick={onClose}
+                            className="px-3 py-1.5 rounded-md bg-gray-700 text-white hover:bg-gray-600"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={() => {
+                                if (selectedVersion) {
+                                    onDownload(selectedVersion);
+                                    onClose();
+                                }
+                            }}
+                            disabled={!selectedVersion}
+                            className="px-3 py-1.5 rounded-md bg-custom-blue text-white hover:brightness-90 disabled:opacity-50"
+                        >
+                            Download
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     const handleMultiLaunch = async () => {
         if (!window.electron || selectedJagexAccounts.size === 0) return;
         const toLaunch = jagexAccounts.filter(a => selectedJagexAccounts.has(a.accountId));
@@ -284,11 +388,21 @@ const GhostliteLauncher = () => {
                 <main className="space-y-4 max-w-5xl mx-auto">
                     <header className="flex justify-between items-center">
                         <h1 className="text-2xl font-bold text-white">Ghostlite Launcher</h1>
-                        {launcherVersion && (
-                            <span className="text-xs font-mono text-gray-400 bg-gray-800/50 px-2 py-1 rounded-md">
-                                v{launcherVersion}
-                            </span>
-                        )}
+                        <div className="flex items-center space-x-3">
+                            <button
+                                onClick={checkForLauncherUpdates}
+                                disabled={updateStatus === 'checking'}
+                                className="px-3 py-1.5 rounded-md bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 flex items-center space-x-1.5 text-sm font-medium"
+                            >
+                                <RefreshCw size={14} className={updateStatus === 'checking' ? 'animate-spin' : ''} />
+                                <span>Check for Launcher Updates</span>
+                            </button>
+                            {launcherVersion && (
+                                <span className="text-xs font-mono text-gray-400 bg-gray-800/50 px-2 py-1 rounded-md">
+                                    v{launcherVersion}
+                                </span>
+                            )}
+                        </div>
                     </header>
 
                     <UpdateNotification
