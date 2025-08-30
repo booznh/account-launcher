@@ -12,9 +12,14 @@ body {
   overflow: hidden; /* Prevent body scroll */
 }
 
-/* Custom scrollbar for a modern look */
 ::-webkit-scrollbar {
-  width: 8px;
+    width: 8px;
+}
+
+/* Custom scrollbar for a modern look */
+::-webkit-scrollbar-track {
+    background: #111827; /* A dark gray that matches your theme */
+    border-radius: 10px;
 }
 
 ::-webkit-scrollbar-track {
@@ -22,14 +27,13 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.4);
-  border-radius: 4px;
-  border: 2px solid transparent;
-  background-clip: content-box;
+    background: #4f46e5; /* A purple that matches your theme */
+    border-radius: 10px;
 }
 
+/* The handle on hover */
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(128, 128, 128, 0.6);
+    background: #6366f1; /* A lighter purple */
 }
 
 /* Ensure root div takes full space */

@@ -21,6 +21,10 @@ contextBridge.exposeInMainWorld('electron', {
     checkLatestVersionAndDownload: () => ipcRenderer.invoke('check-latest-version-and-download'),
     ensureClientJarExists: () => ipcRenderer.invoke('ensure-client-jar-exists'),
 
+    // RuneLite-related functions
+    checkRuneLiteAvailability: () => ipcRenderer.invoke('check-runelite-availability'),
+    browseForRuneLite: () => ipcRenderer.invoke('browse-for-runelite'),
+
     readProperties: () => ipcRenderer.invoke('read-properties'),
     writeProperties: (data) => ipcRenderer.invoke('write-properties', data),
 

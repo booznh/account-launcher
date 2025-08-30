@@ -1,6 +1,6 @@
 {
   "name": "ghostlite-launcher",
-  "version": "1.0.9",
+  "version": "1.20.0",
   "private": true,
   "author": "Ghostlite Team",
   "description": "A modern launcher for your application.",
@@ -28,25 +28,33 @@
   },
   "build": {
     "appId": "com.ghostlite.launcher",
-    "productName": "Ghostlite Launcher",
+    "productName": "Account Launcher & Manager",
+    "icon": "electron/images/icon.png",
     "publish": {
       "provider": "github",
       "owner": "booznh",
       "repo": "account-launcher"
     },
     "files": [
-      "build/**/*"
+      "build/**/*",
+      "electron/images/**/*"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "electron/images/icon.png"
     },
     "mac": {
-      "target": "dmg"
+      "target": "dmg",
+      "icon": "electron/images/icon.png"
     },
     "linux": {
-      "target": "AppImage"
+      "target": "AppImage",
+      "icon": "electron/images/icon.png"
     },
-    "nsis": {}
+    "nsis": {
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   },
   "eslintConfig": {
     "extends": [
