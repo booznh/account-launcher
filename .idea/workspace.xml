@@ -4,7 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="dccf5aaa-a338-4cbd-bfaf-df242396ff68" name="Changes" comment="v1.0.9 - also refresh account list after closing JCEF" />
+    <list default="true" id="dccf5aaa-a338-4cbd-bfaf-df242396ff68" name="Changes" comment="v1.0.9 - also refresh account list after closing JCEF">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/package-lock.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/package.json" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -94,7 +98,7 @@
       <workItem from="1756221817615" duration="545000" />
       <workItem from="1756223042088" duration="3309000" />
       <workItem from="1756226740949" duration="5000" />
-      <workItem from="1756531574296" duration="5748000" />
+      <workItem from="1756531574296" duration="6500000" />
     </task>
     <task id="LOCAL−00001" summary="v1.0.6 + microbot-launcher.jar">
       <option name="closed" value="true" />
